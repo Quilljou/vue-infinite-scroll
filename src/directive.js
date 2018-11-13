@@ -1,4 +1,5 @@
 const ctx = '@@InfiniteScroll';
+import { DIRECTION } from './constants'
 
 var throttle = function (fn, delay) {
   var now, lastExec, timer, context, args; //eslint-disable-line
@@ -42,14 +43,22 @@ var getScrollTop = function (element) {
   return element.scrollTop;
 };
 
+var getScrollLeft = function (element) {
+  if (element === window) {
+    return Math.max(window.pageXOffset || 0, document.documentElement.scrollLeft);
+  }
+
+  return element.scrollLeft;
+};
+
 var getComputedStyle = document.defaultView.getComputedStyle;
 
-var getScrollEventTarget = function (element) {
+var getScrollEventTarget = function (element, direction) {
   var currentNode = element;
   // bugfix, see http://w3help.org/zh-cn/causes/SD9013 and http://stackoverflow.com/questions/17016740/onscroll-function-is-not-working-for-chrome
   while (currentNode && currentNode.tagName !== 'HTML' && currentNode.tagName !== 'BODY' && currentNode.nodeType === 1) {
-    var overflowY = getComputedStyle(currentNode).overflowY;
-    if (overflowY === 'scroll' || overflowY === 'auto') {
+    var overflow = direction === DIRECTION.VERTICAL ? getComputedStyle(currentNode).overflowY : getComputedStyle(currentNode).overflowX;
+    if (overflow === 'scroll' || overflow === 'auto') {
       return currentNode;
     }
     currentNode = currentNode.parentNode;
@@ -65,12 +74,23 @@ var getVisibleHeight = function (element) {
   return element.clientHeight;
 };
 
+
+var getVisibleWidth = function (element) {
+  if (element === window) {
+    return document.documentElement.clientWidth;
+  }
+
+  return element.clientWidth;
+};
+
 var getElementTop = function (element) {
   if (element === window) {
     return getScrollTop(window);
   }
   return element.getBoundingClientRect().top + getScrollTop(window);
 };
+
+
 
 var isAttached = function (element) {
   var currentNode = element.parentNode;
@@ -103,7 +123,23 @@ var doBind = function () {
   }
   directive.throttleDelay = throttleDelay;
 
-  directive.scrollEventTarget = getScrollEventTarget(element);
+  var directionExpr = element.getAttribute('infinite-scroll-direction');
+  var direction = directive.vm[directionExpr] || directionExpr || DIRECTION.VERTICAL;
+
+  var outDirection = true;
+  for (var key in DIRECTION) {
+    if (DIRECTION.hasOwnProperty(key)) {
+      var dire = DIRECTION[key];
+      if (dire === direction) {outDirection = false; break;}
+    }
+  }
+  if (outDirection) direction = DIRECTION.VERTICAL
+  // if (!Object.values(DIRECTION).includes(direction)) {
+  //   direction = DIRECTION.VERTICAL;
+  // }
+  directive.direction = direction
+
+  directive.scrollEventTarget = getScrollEventTarget(element, direction);
   directive.scrollListener = throttle(doCheck.bind(directive), directive.throttleDelay);
   directive.scrollEventTarget.addEventListener('scroll', directive.scrollListener);
 
@@ -158,15 +194,19 @@ var doCheck = function (force) {
   var scrollEventTarget = this.scrollEventTarget;
   var element = this.el;
   var distance = this.distance;
+  var direction = this.direction;
 
   if (force !== true && this.disabled) return; //eslint-disable-line
   var viewportScrollTop = getScrollTop(scrollEventTarget);
   var viewportBottom = viewportScrollTop + getVisibleHeight(scrollEventTarget);
 
+  var viewportScroLeft = getScrollLeft(scrollEventTarget);
+  var viewportRight = viewportScroLeft + getVisibleWidth(scrollEventTarget);
+
   var shouldTrigger = false;
 
   if (scrollEventTarget === element) {
-    shouldTrigger = scrollEventTarget.scrollHeight - viewportBottom <= distance;
+    shouldTrigger = direction === DIRECTION.VERTICAL ? scrollEventTarget.scrollHeight - viewportBottom <= distance : scrollEventTarget.scrollWidth - viewportRight <= distance;
   } else {
     var elementBottom = getElementTop(element) - getElementTop(scrollEventTarget) + element.offsetHeight + viewportScrollTop;
 
@@ -179,13 +219,16 @@ var doCheck = function (force) {
 };
 
 export default {
-  bind(el, binding, vnode) {
+  inserted(el, binding, vnode) {
     el[ctx] = {
       el,
       vm: vnode.context,
       expression: binding.value
     };
     const args = arguments;
+    if (isAttached(el)) {
+      return doBind.call(el[ctx], args);
+    }
     el[ctx].vm.$on('hook:mounted', function () {
       el[ctx].vm.$nextTick(function () {
         if (isAttached(el)) {
